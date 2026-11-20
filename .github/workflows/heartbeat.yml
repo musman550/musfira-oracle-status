@@ -1,0 +1,25 @@
+name: heartbeat
+
+# GitHub disables scheduled workflows in repos with no activity for 60 days.
+# This tiny weekly commit keeps the watchdog alive.
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Commit heartbeat
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > heartbeat.txt
+          git config user.name "musfira-watchdog"
+          git config user.email "211268452+musman550@users.noreply.github.com"
+          git add heartbeat.txt
+          git commit -m "heartbeat" || exit 0
+          git push
