@@ -1,0 +1,64 @@
+name: musfira-watchdog
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes
+  workflow_dispatch: {}       # manual "Run workflow" button
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: musfira-watchdog
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ping Oracle + Vercel (re-check once after 4 min if something fails)
+        id: check
+        run: |
+          set +e
+          bash scripts/check.sh
+          rc=$?
+          if [ "$rc" != "0" ]; then
+            echo "First check failed - waiting 4 minutes (the VM may just be restarting)..."
+            sleep 240
+            git fetch -q origin main && git checkout -q origin/main -- oracle-url.txt 2>/dev/null
+            bash scripts/check.sh
+            rc=$?
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the alert issue when still failing
+        if: steps.check.outputs.rc != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body="Musfira AI watchdog found a problem at $(date -u +'%Y-%m-%d %H:%M UTC').
+
+          $(cat summary.txt)
+
+          Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh label create down --color B60205 --description "Musfira AI needs attention" 2>/dev/null || true
+          n="$(gh issue list --label down --state open --json number --jq '.[0].number')"
+          if [ -z "$n" ]; then
+            gh issue create --title "Musfira AI watchdog: problem detected" --label down --body "$body"
+          else
+            gh issue comment "$n" --body "$body"
+          fi
+
+      - name: Close the alert issue when everything is fine again
+        if: steps.check.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(gh issue list --label down --state open --json number --jq '.[].number'); do
+            gh issue comment "$n" --body "Recovered: all checks pass again. Closing."
+            gh issue close "$n"
+          done
